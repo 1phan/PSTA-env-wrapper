@@ -11,6 +11,13 @@ for c in git tar xz unzip make "$CC" "$CXX"; do
   command -v "$c" >/dev/null 2>&1 || { echo "  MISSING: $c"; miss=1; }
 done
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || { echo "  MISSING: curl or wget"; miss=1; }
+# Required SYSTEM runtime libraries the prebuilt LLVM links against (no shims).
+libmiss=""
+{ wrap_have_lib 'libtinfo\.so' || wrap_have_lib 'libncursesw?\.so'; } || libmiss="$libmiss ncurses/libtinfo"
+wrap_have_lib 'libzstd\.so' || libmiss="$libmiss libzstd"
+if [ -n "$libmiss" ]; then
+  echo "  MISSING system libraries:$libmiss — install them first:"; wrap_pkg_hint; miss=1
+fi
 # gcc must be >= 8 (C++17 + std::optional pass-by-value, matching the prebuilt LLVM)
 gv=$("$CXX" -dumpfullversion -dumpversion 2>/dev/null | cut -d. -f1)
 if [ -n "$gv" ] && [ "$gv" -lt 8 ] 2>/dev/null; then

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Download the in-folder toolchain (cmake + LLVM 16.0.4/ubuntu-22.04 + Z3 4.8.8)
-# and make sure the prebuilt clang actually RUNS on this host (libtinfo shim).
+# and verify the host provides the runtime libraries the prebuilt LLVM needs.
+# We do NOT shim or fake any system library: if a dependency is missing we tell
+# you exactly what to install and stop.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
-mkdir -p "$TC" "$TC/compat"
+mkdir -p "$TC"
 
 dl() { # url dest
   echo ">> downloading $(basename "$2")"
@@ -31,36 +33,27 @@ if [ ! -d "$Z3_DIR/bin" ]; then
   ( cd "$TC" && unzip -q -o z3.zip && rm -rf z3 && mv z3-"$Z3_VER"-* z3 && rm -f z3.zip )
 fi
 
-# ---- make clang runnable (libtinfo) ------------------------------------------
-# The ubuntu-22.04 build needs libtinfo.so.6, present on virtually all modern
-# Linux. If a host is missing the exact soname clang wants, shim it from whatever
-# libtinfo the system has; the versioned-symbol stub is a last resort (the .so.5 case).
-ensure_clang_runs() {
-  "$LLVM_DIR/bin/clang" --version >/dev/null 2>&1 && return 0
-  local missing sys
-  missing=$(ldd "$LLVM_DIR/bin/clang" 2>/dev/null | awk '/libtinfo.*not found/{print $1; exit}')
-  [ -z "$missing" ] && return 1
-  echo ">> clang needs $missing — building a compat shim"
-  sys=$(ldconfig -p 2>/dev/null | grep -oE '/[^ ]*/libtinfo\.so\.[0-9]+' | sort -V | tail -1)
-  if [ -n "$sys" ]; then
-    ln -sf "$sys" "$TC/compat/$missing"
-    LD_LIBRARY_PATH="$TC/compat:${LD_LIBRARY_PATH:-}" "$LLVM_DIR/bin/clang" --version >/dev/null 2>&1 && return 0
-  fi
-  # symlink failed (e.g. needs versioned NCURSES_TINFO_5 symbols) -> build a stub
-  if [ "$missing" = "libtinfo.so.5" ]; then
-    gcc -shared -fPIC -O2 \
-        -Wl,--version-script="$WRAP_ROOT/toolchain/tinfo5.map" \
-        -Wl,-soname,libtinfo.so.5 \
-        -o "$TC/compat/libtinfo.so.5" "$WRAP_ROOT/toolchain/tinfo5_stub.c"
-    LD_LIBRARY_PATH="$TC/compat:${LD_LIBRARY_PATH:-}" "$LLVM_DIR/bin/clang" --version >/dev/null 2>&1 && return 0
-  fi
-  return 1
-}
-if ensure_clang_runs; then
-  echo ">> clang: $(clang --version | head -1)"
-else
-  echo "!! clang from the prebuilt LLVM will not run on this host." >&2
-  echo "   ldd output:"; ldd "$LLVM_DIR/bin/clang" 2>&1 | grep -i 'not found' >&2 || true
+# ---- verify required SYSTEM runtime libraries are present --------------------
+# The prebuilt LLVM (and thus psta, which links LLVMSupport) needs ncurses
+# (libtinfo) and zstd. These are normal, packaged libraries — install them via
+# your package manager; we ship NO substitutes. The clang binary is the arbiter:
+# if it can't load, we surface the exact missing library and the install command.
+missing=""
+{ wrap_have_lib 'libtinfo\.so' || wrap_have_lib 'libncursesw?\.so'; } || missing="$missing ncurses/libtinfo"
+wrap_have_lib 'libzstd\.so' || missing="$missing libzstd"
+if ! "$LLVM_DIR/bin/clang" --version >/dev/null 2>&1; then
+  echo "!! the prebuilt clang cannot start — missing system libraries:" >&2
+  ldd "$LLVM_DIR/bin/clang" 2>/dev/null | awk '/not found/{print "     "$1}' >&2
+  missing="$missing (see clang dynamic deps above)"
+fi
+if [ -n "$missing" ]; then
+  echo "" >&2
+  echo "!! Missing required system libraries:$missing" >&2
+  echo "   Install them, then re-run bootstrap.sh. On this distro:" >&2
+  wrap_pkg_hint >&2
   exit 1
 fi
+
+echo ">> clang: $(clang --version | head -1)"
+echo ">> system libs OK (ncurses/libtinfo, libzstd present)"
 echo "TOOLCHAIN_DONE"

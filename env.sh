@@ -49,8 +49,10 @@ export CXX="${CXX:-g++}"
 export JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 # ---- PATH / LD_LIBRARY_PATH (dirs may not exist yet during bootstrap; harmless) -
+# Runtime libs (libtinfo/ncurses, libzstd) come from the SYSTEM — declared as
+# dependencies and checked in 20-toolchain.sh, not shimmed.
 export PATH="$TC/cmake/bin:$LLVM_DIR/bin:$Z3_DIR/bin:$PSTA_DIR/Release-build/bin:$PATH"
-export LD_LIBRARY_PATH="$TC/compat:$LLVM_DIR/lib:$Z3_DIR/bin:$SVF_DIR/Release-build/svf:$SVF_DIR/Release-build/svf-llvm:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$LLVM_DIR/lib:$Z3_DIR/bin:$SVF_DIR/Release-build/svf:$SVF_DIR/Release-build/svf-llvm:${LD_LIBRARY_PATH:-}"
 
 # ---- helpers -------------------------------------------------------------------
 # Locate a system shared library by stem (e.g. tinfo, zstd) — prefers the dev
@@ -61,4 +63,18 @@ wrap_detect_lib() {
   p=$(ldconfig -p 2>/dev/null | awk -v s="lib${stem}.so" '$1==s {print $NF; exit}')
   [ -z "$p" ] && p=$(ldconfig -p 2>/dev/null | awk -v s="lib${stem}.so." 'index($1,s)==1 {print $NF}' | sort -V | tail -1)
   printf '%s' "$p"
+}
+
+# True if a shared library matching the given ldconfig pattern is installed.
+wrap_have_lib() { ldconfig -p 2>/dev/null | grep -qE "$1"; }
+
+# Print the package-install command for this distro for the required runtime libs
+# (ncurses/libtinfo + zstd) that the prebuilt LLVM links against.
+wrap_pkg_hint() {
+  if   command -v apt-get >/dev/null; then echo "  sudo apt-get install -y libtinfo6 libncurses6 libzstd1"
+  elif command -v dnf     >/dev/null; then echo "  sudo dnf install -y ncurses-libs libzstd"
+  elif command -v yum     >/dev/null; then echo "  sudo yum install -y ncurses-libs libzstd"
+  elif command -v pacman  >/dev/null; then echo "  sudo pacman -S --needed ncurses zstd"
+  elif command -v zypper  >/dev/null; then echo "  sudo zypper install -y libncurses6 libzstd1"
+  else echo "  install the ncurses (libtinfo) and zstd runtime libraries for your distro"; fi
 }

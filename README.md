@@ -30,9 +30,11 @@ source env.sh              # put psta + toolchain on PATH
   `Mem2019/PSTA-16-SemSVF` (SSH key or a PAT on the box). `TechSmith/mp4v2` is public.
 - **~25–30 GB** free disk and a few GB RAM to build. The whole-program **mp4v2**
   analysis is **memory-hungry** — see "Analyzing mp4v2".
-- System runtime libs that any LLVM build needs: `libtinfo.so.6` (ncurses-6) and
-  `libzstd.so.1`. Present on essentially all modern distros; the wrapper locates
-  them automatically and shims `libtinfo` if the exact soname is missing.
+- **System runtime libraries** the prebuilt LLVM links against: **ncurses
+  (`libtinfo`)** and **`libzstd`**. Present on most distros; if not, the preflight
+  stops and prints the exact install command for your package manager
+  (e.g. `apt-get install libtinfo6 libncurses6 libzstd1`). These are declared
+  dependencies — the wrapper installs/ships **no** substitutes.
 
 ## What you get
 
@@ -42,7 +44,7 @@ PSTA-env-wrapper/
 ├── analyze-mp4v2.sh     # gen mp4v2 bitcode → run detectors
 ├── env.sh               # config + environment (source to use psta); override vars here
 ├── scripts/             # the individual, idempotent steps (10..70)
-├── toolchain/           # CMake injections + libtinfo stub (the portability fixes)
+├── toolchain/           # CMake injections (Terminfo/zstd targets, cstdint include)
 └── work/                # (git-ignored) clones, toolchain, builds, bitcode, reports
 ```
 
@@ -102,12 +104,16 @@ mismatch makes SVF **segfault inside `llvm::GlobalVariable`'s constructor on eve
 run**, before any analysis. The ubuntu-22.04 build (gcc-11) passes it by value and
 matches. So: any gcc ≥ 8 LLVM-16 works; the stock 16.0.0/18.04 one does not.
 
-Two more portability fixes are applied automatically:
+Two CMake-level fixes are applied automatically (both wire to **real** things —
+no fakes):
 - **CMake imported targets** `Terminfo::terminfo` / `zstd::libzstd_shared` that the
-  prebuilt LLVM's exports reference but don't define (`toolchain/cmake_inject.cmake`,
-  pointed at the system libs).
+  prebuilt LLVM's exports reference but don't carry definitions for. The injection
+  (`toolchain/cmake_inject.cmake`) recreates them pointing at the host's actual
+  `libtinfo`/`libzstd` (located via `ldconfig`). If those libs aren't installed the
+  preflight already stopped you — see Requirements.
 - **`<cstdint>` force-include** for two PSTA TUs that use `uint64_t` via LLVM
-  headers without including it (`toolchain/cmake_inject_psta.cmake`).
+  headers without including it (`toolchain/cmake_inject_psta.cmake`) — a compile
+  flag, not a source edit.
 
 Build with **gcc** (ABI-matched to the prebuilt LLVM); **clang** from the toolchain
 is used only to emit bitcode.
@@ -126,7 +132,7 @@ LLVM_PLATFORM=aarch64-linux-gnu ...                # (would need an arm LLVM-16 
 
 | Symptom | Fix |
 |---|---|
-| `clang … libtinfo.so.X: cannot open` | host lacks ncurses; the toolchain step shims it — if it still fails, install ncurses runtime. |
+| `clang … libtinfo.so.X: cannot open` | host lacks ncurses — install it (`apt-get install libtinfo6 libncurses6`, `dnf install ncurses-libs`, …). The preflight checks this up front. |
 | CMake: `target Terminfo::terminfo / zstd::libzstd_shared not found` | `libtinfo`/`libzstd` not locatable — install their runtime libs so `ldconfig` sees them. |
 | SIGSEGV in `removeUnusedExtAPIs` / `GlobalVariable`, no output | wrong LLVM (gcc-7 ABI). Keep `LLVM_PLATFORM=...ubuntu-22.04`. |
 | `uint64_t` errors building PSTA | the `<cstdint>` inject didn't apply — use `scripts/40-build-psta.sh`. |
