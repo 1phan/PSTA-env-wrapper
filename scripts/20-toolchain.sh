@@ -33,27 +33,25 @@ if [ ! -d "$Z3_DIR/bin" ]; then
   ( cd "$TC" && unzip -q -o z3.zip && rm -rf z3 && mv z3-"$Z3_VER"-* z3 && rm -f z3.zip )
 fi
 
-# ---- verify required SYSTEM runtime libraries are present --------------------
-# The prebuilt LLVM (and thus psta, which links LLVMSupport) needs ncurses
-# (libtinfo) and zstd. These are normal, packaged libraries — install them via
-# your package manager; we ship NO substitutes. The clang binary is the arbiter:
-# if it can't load, we surface the exact missing library and the install command.
-missing=""
-{ wrap_have_lib 'libtinfo\.so' || wrap_have_lib 'libncursesw?\.so'; } || missing="$missing ncurses/libtinfo"
-wrap_have_lib 'libzstd\.so' || missing="$missing libzstd"
+# ---- verify build dependencies are present (no shims) ------------------------
+# LLVM's exported LLVMSupport links ncurses(libtinfo)/zstd/zlib; LLVMConfig's
+# find_package() needs the -DEV packages. We check the same way it does (link
+# test) and also that the prebuilt clang can actually start. If anything is
+# missing we print the exact install command and stop — we fake nothing.
+missing="$(wrap_missing_build_deps)"
 if ! "$LLVM_DIR/bin/clang" --version >/dev/null 2>&1; then
   echo "!! the prebuilt clang cannot start — missing system libraries:" >&2
   ldd "$LLVM_DIR/bin/clang" 2>/dev/null | awk '/not found/{print "     "$1}' >&2
-  missing="$missing (see clang dynamic deps above)"
+  missing="$missing clang-runtime-libs"
 fi
 if [ -n "$missing" ]; then
   echo "" >&2
-  echo "!! Missing required system libraries:$missing" >&2
-  echo "   Install them, then re-run bootstrap.sh. On this distro:" >&2
+  echo "!! Missing build dependencies: $missing" >&2
+  echo "   Install the -dev packages (needed for LLVM's find_package), then re-run:" >&2
   wrap_pkg_hint >&2
   exit 1
 fi
 
 echo ">> clang: $(clang --version | head -1)"
-echo ">> system libs OK (ncurses/libtinfo, libzstd present)"
+echo ">> build deps OK (ncurses/tinfo, zstd, zlib + headers)"
 echo "TOOLCHAIN_DONE"

@@ -55,26 +55,32 @@ export PATH="$TC/cmake/bin:$LLVM_DIR/bin:$Z3_DIR/bin:$PSTA_DIR/Release-build/bin
 export LD_LIBRARY_PATH="$LLVM_DIR/lib:$Z3_DIR/bin:$SVF_DIR/Release-build/svf:$SVF_DIR/Release-build/svf-llvm:${LD_LIBRARY_PATH:-}"
 
 # ---- helpers -------------------------------------------------------------------
-# Locate a system shared library by stem (e.g. tinfo, zstd) — prefers the dev
-# symlink lib<stem>.so, else the highest versioned lib<stem>.so.N. Returns the
-# resolved path (the '=> /path' field of ldconfig), which actually exists.
-wrap_detect_lib() {
-  local stem="$1" p
-  p=$(ldconfig -p 2>/dev/null | awk -v s="lib${stem}.so" '$1==s {print $NF; exit}')
-  [ -z "$p" ] && p=$(ldconfig -p 2>/dev/null | awk -v s="lib${stem}.so." 'index($1,s)==1 {print $NF}' | sort -V | tail -1)
-  printf '%s' "$p"
+# The prebuilt LLVM's exported LLVMSupport target links ncurses(libtinfo), zstd
+# and zlib; LLVMConfig.cmake recreates the Terminfo::terminfo / zstd::libzstd_shared
+# / ZLIB::ZLIB imported targets via find_package(), which need the -DEV packages
+# (the lib<x>.so dev symlink + headers). We DECLARE these as build dependencies and
+# check them the same way find_package does — by trying to link — rather than
+# faking the targets. Returns the space-separated missing deps ("" = all present).
+wrap_missing_build_deps() {
+  local cc="${CC:-cc}" t miss=""
+  t="$(mktemp 2>/dev/null || echo "/tmp/wrapdep.$$")"; printf 'int main(void){return 0;}\n' > "$t.c"
+  { "$cc" "$t.c" -ltinfo -o /dev/null 2>/dev/null \
+    || "$cc" "$t.c" -lncurses  -o /dev/null 2>/dev/null \
+    || "$cc" "$t.c" -lncursesw -o /dev/null 2>/dev/null; } || miss="$miss ncurses/tinfo"
+  "$cc" "$t.c" -lzstd -o /dev/null 2>/dev/null || miss="$miss zstd"
+  "$cc" "$t.c" -lz    -o /dev/null 2>/dev/null || miss="$miss zlib"
+  printf '#include <zstd.h>\nint main(void){return 0;}\n' > "$t.c"
+  "$cc" -fsyntax-only "$t.c" 2>/dev/null || case " $miss " in *" zstd "*) :;; *) miss="$miss zstd-headers";; esac
+  rm -f "$t" "$t.c"
+  printf '%s' "${miss# }"
 }
 
-# True if a shared library matching the given ldconfig pattern is installed.
-wrap_have_lib() { ldconfig -p 2>/dev/null | grep -qE "$1"; }
-
-# Print the package-install command for this distro for the required runtime libs
-# (ncurses/libtinfo + zstd) that the prebuilt LLVM links against.
+# Print the -dev package install command for this distro.
 wrap_pkg_hint() {
-  if   command -v apt-get >/dev/null; then echo "  sudo apt-get install -y libtinfo6 libncurses6 libzstd1"
-  elif command -v dnf     >/dev/null; then echo "  sudo dnf install -y ncurses-libs libzstd"
-  elif command -v yum     >/dev/null; then echo "  sudo yum install -y ncurses-libs libzstd"
-  elif command -v pacman  >/dev/null; then echo "  sudo pacman -S --needed ncurses zstd"
-  elif command -v zypper  >/dev/null; then echo "  sudo zypper install -y libncurses6 libzstd1"
-  else echo "  install the ncurses (libtinfo) and zstd runtime libraries for your distro"; fi
+  if   command -v apt-get >/dev/null; then echo "  sudo apt-get install -y libtinfo-dev libzstd-dev zlib1g-dev   # (libtinfo-dev may be 'libncurses-dev')"
+  elif command -v dnf     >/dev/null; then echo "  sudo dnf install -y ncurses-devel libzstd-devel zlib-devel"
+  elif command -v yum     >/dev/null; then echo "  sudo yum install -y ncurses-devel libzstd-devel zlib-devel"
+  elif command -v pacman  >/dev/null; then echo "  sudo pacman -S --needed ncurses zstd zlib"
+  elif command -v zypper  >/dev/null; then echo "  sudo zypper install -y ncurses-devel libzstd-devel zlib-devel"
+  else echo "  install the -dev packages for ncurses(libtinfo), zstd and zlib"; fi
 }

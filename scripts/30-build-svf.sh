@@ -5,16 +5,11 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 cd "$SVF_DIR"
 
-TINFO=$(wrap_detect_lib tinfo); ZSTD=$(wrap_detect_lib zstd)
-echo ">> tinfo=$TINFO  zstd=$ZSTD"
-
 echo ">> configuring SVF (gcc, Release, assertions on, warn-as-error off)"
 cmake -G "Unix Makefiles" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
   -DSVF_ENABLE_ASSERTIONS=ON -DSVF_WARN_AS_ERROR=OFF -DBUILD_SHARED_LIBS=OFF \
-  -DWRAP_TINFO_LIB="$TINFO" -DWRAP_ZSTD_LIB="$ZSTD" \
-  -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$WRAP_ROOT/toolchain/cmake_inject.cmake" \
   -S . -B Release-build
 
 echo ">> building SvfLLVM with -j$JOBS (~15 min)"

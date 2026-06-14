@@ -30,11 +30,17 @@ source env.sh              # put psta + toolchain on PATH
   `Mem2019/PSTA-16-SemSVF` (SSH key or a PAT on the box). `TechSmith/mp4v2` is public.
 - **~25–30 GB** free disk and a few GB RAM to build. The whole-program **mp4v2**
   analysis is **memory-hungry** — see "Analyzing mp4v2".
-- **System runtime libraries** the prebuilt LLVM links against: **ncurses
-  (`libtinfo`)** and **`libzstd`**. Present on most distros; if not, the preflight
-  stops and prints the exact install command for your package manager
-  (e.g. `apt-get install libtinfo6 libncurses6 libzstd1`). These are declared
-  dependencies — the wrapper installs/ships **no** substitutes.
+- **`-dev` packages for ncurses, zstd and zlib.** The prebuilt LLVM's CMake
+  package (`LLVMConfig.cmake`) runs `find_package(Terminfo)` / `find_package(zstd)`
+  / `find_package(ZLIB)`, which need the development files (`libtinfo.so`,
+  `libzstd.so`, `zstd.h`, …) — i.e. the `-dev` packages, not just the runtime libs.
+  The preflight checks for them (by trying to link, exactly like `find_package`)
+  and, if any are missing, stops and prints the install command for your distro:
+  ```
+  sudo apt-get install -y libtinfo-dev libzstd-dev zlib1g-dev   # Debian/Ubuntu
+  sudo dnf install -y ncurses-devel libzstd-devel zlib-devel    # Fedora/RHEL
+  ```
+  The wrapper installs/ships/fakes **nothing** — it just tells you what to install.
 
 ## What you get
 
@@ -44,7 +50,6 @@ PSTA-env-wrapper/
 ├── analyze-mp4v2.sh     # gen mp4v2 bitcode → run detectors
 ├── env.sh               # config + environment (source to use psta); override vars here
 ├── scripts/             # the individual, idempotent steps (10..70)
-├── toolchain/           # CMake injections (Terminfo/zstd targets, cstdint include)
 └── work/                # (git-ignored) clones, toolchain, builds, bitcode, reports
 ```
 
@@ -104,16 +109,18 @@ mismatch makes SVF **segfault inside `llvm::GlobalVariable`'s constructor on eve
 run**, before any analysis. The ubuntu-22.04 build (gcc-11) passes it by value and
 matches. So: any gcc ≥ 8 LLVM-16 works; the stock 16.0.0/18.04 one does not.
 
-Two CMake-level fixes are applied automatically (both wire to **real** things —
-no fakes):
-- **CMake imported targets** `Terminfo::terminfo` / `zstd::libzstd_shared` that the
-  prebuilt LLVM's exports reference but don't carry definitions for. The injection
-  (`toolchain/cmake_inject.cmake`) recreates them pointing at the host's actual
-  `libtinfo`/`libzstd` (located via `ldconfig`). If those libs aren't installed the
-  preflight already stopped you — see Requirements.
-- **`<cstdint>` force-include** for two PSTA TUs that use `uint64_t` via LLVM
-  headers without including it (`toolchain/cmake_inject_psta.cmake`) — a compile
-  flag, not a source edit.
+Two host-specific gotchas, handled the honest way (**no CMake injection, no fake
+libraries**):
+- **ncurses/zstd `-dev` packages.** LLVM's `LLVMConfig.cmake` runs
+  `find_package(Terminfo)`/`find_package(zstd)` to recreate the `Terminfo::terminfo`
+  / `zstd::libzstd_shared` imported targets its `LLVMSupport` export references.
+  Those succeed only when the `-dev` packages are installed — so we **require** them
+  (see Requirements) and CMake creates the targets itself.
+- **`uint64_t` errors building PSTA** are an **upstream bug in `PSTA-16-SemSVF`**:
+  a couple of TUs include `<llvm/ADT/SmallVector.h>` before any `<cstdint>`, and
+  libstdc++ ≥ 14 no longer provides `uint64_t` transitively. The fix is a one-line
+  `#include <cstdint>` in those sources (upstream). It only bites on very new
+  toolchains; on libstdc++ < 14 the build is clean.
 
 Build with **gcc** (ABI-matched to the prebuilt LLVM); **clang** from the toolchain
 is used only to emit bitcode.
@@ -132,10 +139,9 @@ LLVM_PLATFORM=aarch64-linux-gnu ...                # (would need an arm LLVM-16 
 
 | Symptom | Fix |
 |---|---|
-| `clang … libtinfo.so.X: cannot open` | host lacks ncurses — install it (`apt-get install libtinfo6 libncurses6`, `dnf install ncurses-libs`, …). The preflight checks this up front. |
-| CMake: `target Terminfo::terminfo / zstd::libzstd_shared not found` | `libtinfo`/`libzstd` not locatable — install their runtime libs so `ldconfig` sees them. |
+| CMake: `target Terminfo::terminfo / zstd::libzstd_shared not found`, or `clang … libtinfo.so.X` | the `-dev` packages aren't installed — `find_package(Terminfo/zstd)` can't find them. Install `libtinfo-dev libzstd-dev zlib1g-dev` (or your distro's equivalents); the preflight checks this up front. |
 | SIGSEGV in `removeUnusedExtAPIs` / `GlobalVariable`, no output | wrong LLVM (gcc-7 ABI). Keep `LLVM_PLATFORM=...ubuntu-22.04`. |
-| `uint64_t` errors building PSTA | the `<cstdint>` inject didn't apply — use `scripts/40-build-psta.sh`. |
+| `uint64_t` / `SmallVectorSizeType` errors building PSTA | upstream bug in `PSTA-16-SemSVF` (missing `#include <cstdint>`); only on libstdc++ ≥ 14. Add the include to the failing `.cpp` upstream and re-pin `PSTA_REF`. |
 | mp4v2 run prints SVF stats then dies / KILLED | out of memory — more RAM, `BOUND=1`, or scope down (keep `mp4util.cpp`). |
 | Private-repo clone fails | the box needs SSH-key/PAT access to the `Mem2019` repos. |
 

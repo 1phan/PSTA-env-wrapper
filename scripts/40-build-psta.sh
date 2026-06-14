@@ -4,15 +4,11 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 cd "$PSTA_DIR"
 
-TINFO=$(wrap_detect_lib tinfo); ZSTD=$(wrap_detect_lib zstd)
-
 echo ">> configuring PSTA (gcc, Release)"
 cmake -G "Unix Makefiles" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
   -DSVF_DIR="$SVF_DIR" -DLLVM_DIR="$LLVM_DIR" -DZ3_DIR="$Z3_DIR" \
-  -DWRAP_TINFO_LIB="$TINFO" -DWRAP_ZSTD_LIB="$ZSTD" \
-  -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$WRAP_ROOT/toolchain/cmake_inject.cmake;$WRAP_ROOT/toolchain/cmake_inject_psta.cmake" \
   -S . -B Release-build
 
 echo ">> building psta with -j$JOBS"
